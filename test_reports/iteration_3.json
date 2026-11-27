@@ -1,0 +1,35 @@
+{
+  "summary": "Retested the CDR upload 500 ('Mixed timezones detected'). The 500 is fixed: none of the timestamp styles tested return 500 any more, through the API or the UI. The parser fix is still incomplete, though. A CDR where every timestamp has a non-UTC zone name (e.g. all 'EST') is rejected with 400 'No rows had a readable date/time'. EST values mixed with naive times are silently dropped as invalid. UTC names, mixed ISO offsets (-05:00/+00:00/Z) with naive times, +0000/-0500, US AM/PM, epoch s/ms, blank rows and EST+UTC mixes all import with correct UTC. CLI matching (both upload orders), cli_matched in the response, and the reset of matched CLIs on CDR delete all work. Backend: 11 of 13 pytest pass. UI: the Uploads -> CDR report -> mapping-step -> import flow works; the EST-only file shows the 400 toast.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/uploads/commit kind=cdr (ingest.parse_ts)", "issue": "Timestamps with tz abbreviations other than UTC/GMT (EST, EDT, CST, PST, IST, also lowercase 'utc') are turned into NaT silently. pandas 3.1.1 to_datetime(format='mixed', errors='coerce') coerces them without raising, so the dateutil fallback only runs when pandas happens to raise (e.g. EST mixed with UTC or offsets). Effects: a CDR with only 'YYYY-MM-DD HH:MM:SS EST' rows -> 400 'No rows had a readable date/time'. 'EST' rows mixed with naive rows -> the EST rows are counted invalid. Fix: after the fast path, re-parse every non-blank value that came out NaT with _parse_one (or use the per-value path whenever raw contains [A-Za-z]{2,5}$). Also make the TZ_ABBR lookup case-insensitive.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "ingest.parse_ts", "issue": "A file mixing epoch values with date strings: the epoch rows become NaT because the epoch branch needs all values to be epoch."},
+      {"endpoint": "ingest.parse_ts", "issue": "Naive times in the DST fall-back hour (e.g. 2026-11-01 01:30 America/New_York) become NaT (ambiguous='NaT') and are counted invalid. The fallback path keeps them (fold=0), so the two paths behave differently. Consider ambiguous='infer' or fold=0 to match."},
+      {"endpoint": "ingest.parse_ts", "issue": "dd/mm/yyyy dates are read as mm/dd (e.g. '01/11/2026' -> Jan 11). This is expected for US Primo exports; just noting it."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_cdr_timestamp_parsing.py", "/app/test_reports/pytest/cdr_ts.xml"],
+  "action_items": [
+    "Fix parse_ts so values with tz abbreviations that pandas coerces to NaT are re-parsed with _parse_one (EST-only files currently fail with 400, and EST rows mixed with naive rows are dropped).",
+    "Optional: case-insensitive tz abbreviations; handle epoch values mixed with date strings; handle DST-ambiguous naive times the same way in both paths.",
+    "Update REAL_UPLOAD in tests/test_cdr_cli_match.py to 58cbf54b-a15f-40fb-ba4f-38698c7982c4 (stale id; harmless because it deletes only the uploads it created)."
+  ],
+  "critical_code_review_comments": [
+    "parse_ts relies on pandas raising to trigger the fallback. With errors='coerce', unparseable tz names never raise, so the fallback is not reached. Checking for NaT in non-blank values would be more reliable.",
+    "upload_commit now wraps build in try/except -> 400 with logger.exception: good."
+  ],
+  "updated_files": ["/app/backend/tests/test_cdr_timestamp_parsing.py"],
+  "success_rate": {"backend": "85% (11/13)", "frontend": "100% (flow works; the EST-only failure is the backend issue above)"},
+  "seed_data_creation": "None kept. All TEST uploads (fake phones 78655501xx, CLIs 30555501xx, date 2026-11-20) were deleted by id. Verified afterwards: only 'CEReport_Nov 27.csv' (58cbf54b..., 6,597 calls, 0 with a CLI) remains, cdr collection has 0 rows, no other calls, settings are still America/New_York with cdr_match_seconds 120. The new TEST CDR column signature was saved in db.mappings (same as the existing CDR test format).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `cd /app/backend && python -m pytest tests/test_cdr_timestamp_parsing.py -n 0` (serial, cleans up after itself). Cases est_name_only and est_and_naive should pass after the fix. Quick unit check: /tmp/unit_ts.py calls ingest.parse_ts directly. UI sign-in: go to /sign-in, then Clerk signIn.create({strategy:'ticket'}) + setActive in page.evaluate. Do NOT run test_dialer_api.py (it calls demo/load).",
+  "rca of the issue": "Original 500: pandas raised 'Mixed timezones detected' inside parse_ts. It now hits the dateutil fallback, or returns 400 via the new try/except. Remaining bug: pandas 3.x to_datetime(format='mixed', errors='coerce') returns NaT for strings ending in zone names it doesn't know (EST etc.) and does not raise, so the fallback is skipped. Reproduce: commit a kind=cdr CSV with 'Start Time' = '2026-11-20 10:00:00 EST' -> 400 No rows had a readable date/time. Mitigation: per-value fallback for every non-blank NaT."
+}

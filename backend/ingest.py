@@ -105,7 +105,7 @@ TZ_ABBR = {k: h * 3600 for k, h in {"UTC": 0, "GMT": 0, "Z": 0, "EST": -5, "EDT"
 
 def _parse_one(v: str, zone: ZoneInfo):
     try:
-        d = dtparser.parse(v, tzinfos=TZ_ABBR)
+        d = dtparser.parse(v.upper(), tzinfos=TZ_ABBR)
     except (ValueError, OverflowError, TypeError):
         return pd.NaT
     if d.tzinfo is None:
@@ -124,13 +124,18 @@ def parse_ts(df, mapping, tz) -> pd.Series:
     try:
         has_offset = raw.str.contains(r"(?:Z|[+-]\d{2}:?\d{2})$", regex=True)
         naive = pd.to_datetime(raw.where(~has_offset), errors="coerce", format="mixed")
-        naive = naive.dt.tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward").dt.tz_convert("UTC")
+        naive = naive.dt.tz_localize(tz, ambiguous=True, nonexistent="shift_forward").dt.tz_convert("UTC")
         aware = pd.to_datetime(raw.where(has_offset), errors="coerce", format="mixed", utc=True)
-        return aware.where(has_offset, naive).dt.tz_localize(None)
-    except (ValueError, TypeError):  # time-zone names / mixed styles: parse each distinct value
+        ts = aware.where(has_offset, naive).dt.tz_localize(None)
+    except (ValueError, TypeError):  # mixed time-zone styles: parse every value individually
+        ts = pd.Series(pd.NaT, index=raw.index, dtype="datetime64[ns]")
+    retry = ts.isna() & (raw != "")  # e.g. zone names like 'EST' that pandas silently drops
+    if retry.any():
         zone = ZoneInfo(tz)
-        lookup = {v: _parse_one(v, zone) for v in raw.unique()}
-        return pd.to_datetime(raw.map(lookup), errors="coerce")
+        lookup = {v: _parse_one(v, zone) for v in raw[retry].unique()}
+        ts = ts.astype("datetime64[ns]")
+        ts[retry] = pd.to_datetime(raw[retry].map(lookup), errors="coerce")
+    return ts
 
 
 def build_docs(df: pd.DataFrame, mapping: dict, tz: str, upload_id: str) -> tuple[list, int]:

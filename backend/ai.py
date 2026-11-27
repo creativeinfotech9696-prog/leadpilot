@@ -55,6 +55,8 @@ def build_context(a: dict, s: dict, memory: list, feedback: list) -> str:
     for r in a["lists"][:30]:
         bt = "; ".join(f"{DAYS[b['weekday']]} {b['hour']}:00 conn {b['connect_rate']}% conv {b['conv_rate']}%" for b in r["best_times"])
         out.append(_row(r, lk) + (f" | best: {bt}" if bt else ""))
+    out.append(f"\nCLI coverage: {k.get('cli_coverage', 0)}% of calls have a known CLI (from the dialer export or matched from carrier CDR reports). "
+               "CLI stats below only cover those calls; if coverage is low, tell the user to upload the matching CDR report.")
     ck = ["cli", "area_code", "dials", "connect_rate", "conv_rate", "prior_connect_rate", "recent_connect_rate",
           "connect_drop_pct", "score", "status"]
     out.append("\nCLIs (" + ",".join(ck) + "):")

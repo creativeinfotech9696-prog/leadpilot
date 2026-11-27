@@ -31,7 +31,7 @@ export default function Settings() {
   const save = async () => {
     setBusy(true);
     try {
-      await api("put", "/settings", { timezone: f.timezone, min_dials: f.min_dials, cli_drop_pct: f.cli_drop_pct, list_drop_pct: f.list_drop_pct, disposition_map: f.dmap, list_costs: f.list_costs });
+      await api("put", "/settings", { timezone: f.timezone, min_dials: f.min_dials, cli_drop_pct: f.cli_drop_pct, list_drop_pct: f.list_drop_pct, cdr_match_seconds: f.cdr_match_seconds, disposition_map: f.dmap, list_costs: f.list_costs });
       await qc.invalidateQueries();
       toast.success("Settings saved — analysis refreshed");
     } catch (e) { toast.error(errMsg(e)); }
@@ -55,6 +55,7 @@ export default function Settings() {
             </label>
             <NumField label="Minimum dials before judging" hint="Lists / CLIs below this stay on Watch" value={f.min_dials} onChange={set("min_dials")} testId="settings-min-dials" />
             <NumField label="CLI spam-flag drop (%)" hint="3-day answer-rate drop that rests a CLI" value={f.cli_drop_pct} onChange={set("cli_drop_pct")} testId="settings-cli-drop" />
+            <NumField label="CDR match window (seconds)" hint="How far apart dialer and CDR times may be for the same call (±)" value={f.cdr_match_seconds} onChange={set("cdr_match_seconds")} testId="settings-cdr-window" />
             <NumField label="List exhaustion drop (%)" hint="Connect drop that, with heavy redials, replaces a list" value={f.list_drop_pct} onChange={set("list_drop_pct")} testId="settings-list-drop" />
           </div>
         </Panel>

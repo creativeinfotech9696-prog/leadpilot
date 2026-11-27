@@ -1,6 +1,15 @@
 import { useAnalysis } from "@/lib/api";
 import HealthTable from "@/components/dialer/HealthTable";
+import { Link } from "react-router-dom";
+import { Link2 } from "lucide-react";
 import { PageHeader, NoData, Loading, Panel, pct, num } from "@/components/dialer/common";
+
+const CoverageNote = ({ c }) => (
+  <div data-testid="cli-coverage-note" className="mb-4 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-300">
+    <Link2 className="h-4 w-4 shrink-0" />
+    <span>Only <span className="num font-semibold">{c}%</span> of calls have a CLI. Your Primo call export doesn't include caller IDs — <Link to="/uploads" className="underline underline-offset-2">upload the CDR report</Link> for the same dates and they'll be matched automatically.</span>
+  </div>
+);
 
 const COLS = [
   { h: "Area", v: (r) => r.area_code || "—" },
@@ -20,7 +29,8 @@ export default function Clis() {
   return (
     <div>
       <PageHeader title="CLI Health & Reputation" subtitle="A sudden drop in answer rate over the last 3 days usually means carriers are labelling the number as spam." />
-      {!data?.has_data ? <NoData /> : (
+      {data?.has_data && data.kpis.cli_coverage < 80 && <CoverageNote c={data.kpis.cli_coverage} />}
+      {!data?.has_data ? <NoData /> : data.clis.length === 0 ? null : (
         <div className="space-y-4">
           <HealthTable rows={data.clis} keyField="cli" cols={COLS} renderDetail={Detail} testId="cli-health-table" label="CLI" />
           <Panel title="Best CLI + list pairings" subtitle="Highest-converting caller ID and list combinations in this window" testId="cli-pairs-panel">

@@ -14,7 +14,7 @@ KEYWORDS = [
     ("contact", ["INTEREST", "NI", "CALL BACK", "CALLBACK", "CALLBK", "CB", "DNC", "XFER", "TRANSFER", "PITCH", "NP",
                  "HUMAN", "ANSWER", "LANG", "WRONG", "HANG", "HU", "DEC", "DECLINE", "NOT QUAL", "NQ", "QUALIFIED", "LEAD"]),
 ]
-PROJ = {"_id": 0, "list": 1, "cli": 1, "phone": 1, "ts": 1, "direction": 1, "disposition": 1, "talk_time": 1}
+PROJ = {"_id": 0, "call_id": 1, "list": 1, "cli": 1, "phone": 1, "ts": 1, "direction": 1, "disposition": 1, "talk_time": 1}
 STATUS_ACTIONS = {
     "list": {"Keep": "Keep running", "Watch": "Monitor - run only in best hours", "Rest": "Rest 3-5 days",
              "Replace": "Replace with fresh data"},
@@ -157,9 +157,13 @@ def analyze(df: pd.DataFrame, s: dict, anchor, window_days: int) -> dict:
     ov = rates(df)
     cut = anchor - timedelta(days=3)
     lists = summarize(df, ["list"]).merge(trend(df, "list", anchor), on="list", how="left").fillna(0)
-    clis = summarize(df, ["cli"]).merge(trend(df, "cli", anchor), on="cli", how="left").fillna(0)
-    pairs = summarize(df, ["cli", "list"])
-    pairs = pairs[pairs["dials"] >= max(20, s["min_dials"] // 3)].sort_values(["conv_rate", "connect_rate"], ascending=False)
+    cdf = df[df["cli"] != "Unknown"]
+    if cdf.empty:
+        clis, pr = pd.DataFrame(), []
+    else:
+        clis = summarize(cdf, ["cli"]).merge(trend(cdf, "cli", anchor), on="cli", how="left").fillna(0)
+        pairs = summarize(cdf, ["cli", "list"])
+        pr = records(pairs[pairs["dials"] >= max(20, s["min_dials"] // 3)].sort_values(["conv_rate", "connect_rate"], ascending=False))
     per_cell = summarize(df, ["list", "weekday", "hour"])
     all_cell = summarize(df, ["weekday", "hour"]).assign(list="__all__")
     cell_min = max(15, s["min_dials"] // 10)
@@ -174,8 +178,7 @@ def analyze(df: pd.DataFrame, s: dict, anchor, window_days: int) -> dict:
         row["cost_per_sale"] = round(cost / r["sales"], 2) if cost and r["sales"] else None
         list_rows.append(row)
     cli_rows = []
-    pr = records(pairs)
-    for r in records(clis):
+    for r in ([] if clis.empty else records(clis)):
         row = score_row(r, ov, s, "cli")
         digits = re.sub(r"\D", "", r["cli"])[-10:]
         row["area_code"] = digits[:3] if len(digits) == 10 else ""
@@ -187,7 +190,8 @@ def analyze(df: pd.DataFrame, s: dict, anchor, window_days: int) -> dict:
     kpis = {**ov, "inbound": int((df["direction"] == "inbound").sum()), "outbound": int((df["direction"] != "inbound").sum()),
             "total_lists": len(list_rows), "active_lists": int(recent["list"].nunique()), "total_clis": len(cli_rows),
             "flagged_clis": sum(1 for c in cli_rows if c["status"] in ("Rest", "Replace")),
-            "lists_to_replace": sum(1 for x in list_rows if x["status"] in ("Rest", "Replace"))}
+            "lists_to_replace": sum(1 for x in list_rows if x["status"] in ("Rest", "Replace")),
+            "cli_coverage": round(float((df["cli"] != "Unknown").mean()) * 100, 1)}
     heat = pd.concat([all_cell, per_cell])[["list", "weekday", "hour", "dials", "sales", "connect_rate", "conv_rate"]]
     daily = summarize(df, ["date"]).sort_values("date")
     daily = daily[daily["dials"] >= daily["dials"].median() * 0.15]

@@ -45,6 +45,12 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("upload_id", ASCENDING)], name="upload_id"),
         IndexModel([("list", ASCENDING), ("ts", DESCENDING)], name="list_ts"),
         IndexModel([("cli", ASCENDING), ("ts", DESCENDING)], name="cli_ts"),
+        IndexModel([("cli_upload_id", ASCENDING)], name="cli_upload_id"),
+    ],
+    "cdr": [
+        IndexModel([("key", ASCENDING)], name="key", unique=True),
+        IndexModel([("ts", ASCENDING)], name="ts"),
+        IndexModel([("upload_id", ASCENDING)], name="upload_id"),
     ],
     "uploads": [IndexModel([("id", ASCENDING)], name="id", unique=True), IndexModel([("created_at", DESCENDING)], name="created_desc")],
     "recommendations": [IndexModel([("id", ASCENDING)], name="id", unique=True), IndexModel([("status", ASCENDING), ("created_at", DESCENDING)], name="status_created")],
@@ -67,7 +73,7 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 DEFAULT_SETTINGS = {"id": "workspace", "timezone": "America/New_York", "disposition_map": {}, "min_dials": 100,
-                    "cli_drop_pct": 35, "list_drop_pct": 30, "list_costs": {}}
+                    "cli_drop_pct": 35, "list_drop_pct": 30, "list_costs": {}, "cdr_match_seconds": 120}
 STATE = {"version": 0, "cache": {}, "ai": {"running": False, "last_run": None, "last_error": None}, "task": None}
 
 
@@ -139,15 +145,21 @@ async def disp_rows(df, column):
             for d in ingest.disposition_counts(df, column)]
 
 
+def sig(kind: str, cols: list) -> str:
+    return f"{kind}:{ingest.signature(cols)}"
+
+
 @api_router.post("/uploads/preview")
-async def upload_preview(file: UploadFile = File(...), user: dict = Depends(require_user)):
+async def upload_preview(file: UploadFile = File(...), kind: Literal["calls", "cdr"] = Form("calls"), user: dict = Depends(require_user)):
     df = await read_upload(file)
     cols = list(df.columns)
-    saved = await db.mappings.find_one({"signature": ingest.signature(cols)}, {"_id": 0})
-    mapping = {**ingest.suggest(cols), **(saved["mapping"] if saved else {})}
-    return {"filename": file.filename, "rows": len(df), "columns": cols, "mapping": mapping,
+    saved = await db.mappings.find_one({"signature": sig(kind, cols)}, {"_id": 0})
+    mapping = {**ingest.suggest(cols, kind), **(saved["mapping"] if saved else {})}
+    s = await get_settings()
+    return {"kind": kind, "filename": file.filename, "rows": len(df), "columns": cols, "mapping": mapping,
             "known_format": bool(saved), "sample": df.head(5).to_dict("records"),
-            "dispositions": await disp_rows(df, mapping.get("disposition"))}
+            "file_tz": (saved or {}).get("file_tz") or s["timezone"],
+            "dispositions": await disp_rows(df, mapping.get("disposition")) if kind == "calls" else []}
 
 
 @api_router.post("/uploads/dispositions")
@@ -156,22 +168,45 @@ async def upload_dispositions(file: UploadFile = File(...), column: str = Form(.
 
 
 class CommitIn(BaseModel):
+    kind: Literal["calls", "cdr"] = "calls"
+    file_tz: Optional[str] = None
     mapping: Dict[str, Optional[str]]
     disposition_map: Dict[str, Literal["sale", "contact", "connected", "none"]] = {}
 
 
-async def insert_calls(docs: list) -> int:
+async def insert_calls(docs: list, coll: str = "calls") -> int:
     n = 0
     for i in range(0, len(docs), 5000):
         try:
-            r = await db.calls.insert_many(docs[i:i + 5000], ordered=False)
+            r = await db[coll].insert_many(docs[i:i + 5000], ordered=False)
             n += len(r.inserted_ids)
         except BulkWriteError as e:
             n += e.details.get("nInserted", 0)
     return n
 
 
+async def run_cli_match() -> int:
+    s = await get_settings()
+    calls = await db.calls.find({"cli": "Unknown"}, {"_id": 1, "phone": 1, "ts": 1, "direction": 1, "call_id": 1}).to_list(None)
+    if not calls:
+        return 0
+    df = pd.DataFrame(calls)
+    lo, hi = df["ts"].min() - timedelta(hours=2), df["ts"].max() + timedelta(hours=2)
+    cdr = await db.cdr.find({"ts": {"$gte": lo, "$lte": hi}}, {"_id": 0, "from": 1, "to": 1, "ts": 1, "call_id": 1, "upload_id": 1}).to_list(None)
+    if not cdr:
+        return 0
+    res = await asyncio.to_thread(ingest.match_cli, df, pd.DataFrame(cdr), s["cdr_match_seconds"])
+    for (cli, up), g in res.groupby(["cli", "upload_id"]):
+        await db.calls.update_many({"_id": {"$in": list(g["_id"])}}, {"$set": {"cli": cli, "cli_upload_id": up}})
+    return len(res)
+
+
+async def reset_cdr_clis(flt: dict) -> None:
+    await db.calls.update_many({"cli_upload_id": {"$exists": True}, **flt}, {"$set": {"cli": "Unknown"}, "$unset": {"cli_upload_id": ""}})
+
+
 async def finish_ingest(upload: dict, disposition_map: dict) -> dict:
+    upload["cli_matched"] = await run_cli_match()
     await db.uploads.insert_one(dict(upload))
     if disposition_map:
         s = await get_settings()
@@ -189,24 +224,32 @@ async def upload_commit(file: UploadFile = File(...), payload: str = Form(...), 
         body = CommitIn.model_validate_json(payload)
     except Exception:
         raise HTTPException(400, "Invalid column mapping")
-    missing = [f for f in ingest.REQUIRED if not body.mapping.get(f)]
+    cdr = body.kind == "cdr"
+    missing = [f for f in (ingest.CDR_REQUIRED if cdr else ingest.REQUIRED) if not body.mapping.get(f)]
     if missing:
         raise HTTPException(400, f"Please map these columns: {', '.join(missing)}")
     s = await get_settings()
+    tz = body.file_tz or s["timezone"]
+    try:
+        ZoneInfo(tz)
+    except Exception:
+        raise HTTPException(400, "Unknown time zone")
     upload_id = str(uuid.uuid4())
     df = await read_upload(file)
-    docs, invalid = await asyncio.to_thread(ingest.build_docs, df, body.mapping, s["timezone"], upload_id)
+    build = ingest.build_cdr_docs if cdr else ingest.build_docs
+    docs, invalid = await asyncio.to_thread(build, df, body.mapping, tz, upload_id)
     if not docs:
         raise HTTPException(400, "No rows had a readable date/time. Check the timestamp column mapping.")
-    inserted = await insert_calls(docs)
-    await db.mappings.update_one({"signature": ingest.signature(list(df.columns))},
-                                 {"$set": {"mapping": body.mapping, "updated_at": now_iso()}}, upsert=True)
-    upload = {"id": upload_id, "filename": file.filename, "rows_total": len(df), "rows_imported": inserted,
-              "duplicates": len(docs) - inserted, "invalid": invalid, "is_demo": False,
+    inserted = await insert_calls(docs, "cdr" if cdr else "calls")
+    await db.mappings.update_one({"signature": sig(body.kind, list(df.columns))},
+                                 {"$set": {"mapping": body.mapping, "file_tz": tz, "updated_at": now_iso()}}, upsert=True)
+    upload = {"id": upload_id, "kind": body.kind, "filename": file.filename, "rows_total": len(df), "rows_imported": inserted,
+              "duplicates": len(docs) - inserted, "invalid": invalid, "is_demo": False, "file_tz": tz,
               "date_from": min(d["ts"] for d in docs).isoformat(), "date_to": max(d["ts"] for d in docs).isoformat(),
-              "lists": len({d["list"] for d in docs}), "clis": len({d["cli"] for d in docs}),
+              "lists": 0 if cdr else len({d["list"] for d in docs}),
+              "clis": len({d["from"] for d in docs}) if cdr else len({d["cli"] for d in docs} - {"Unknown"}),
               "created_at": now_iso(), "uploaded_by": user["user_id"]}
-    return await finish_ingest(upload, body.disposition_map)
+    return await finish_ingest(upload, {} if cdr else body.disposition_map)
 
 
 @api_router.post("/demo/load")
@@ -217,7 +260,7 @@ async def demo_load(user: dict = Depends(require_user)):
     upload_id = str(uuid.uuid4())
     docs = await asyncio.to_thread(demo.generate, upload_id)
     inserted = await insert_calls(docs)
-    upload = {"id": upload_id, "filename": "Sample Primo data (demo)", "rows_total": len(docs), "rows_imported": inserted,
+    upload = {"id": upload_id, "kind": "calls", "filename": "Sample Primo data (demo)", "rows_total": len(docs), "rows_imported": inserted,
               "duplicates": 0, "invalid": 0, "is_demo": True, "date_from": min(d["ts"] for d in docs).isoformat(),
               "date_to": max(d["ts"] for d in docs).isoformat(), "lists": len(demo.LISTS), "clis": len(demo.CLIS),
               "created_at": now_iso(), "uploaded_by": user["user_id"]}
@@ -234,6 +277,9 @@ async def delete_upload(upload_id: str, user: dict = Depends(require_user)):
     if (await db.uploads.delete_one({"id": upload_id})).deleted_count == 0:
         raise HTTPException(404, "Not found")
     await db.calls.delete_many({"upload_id": upload_id})
+    await db.cdr.delete_many({"upload_id": upload_id})
+    await reset_cdr_clis({"cli_upload_id": upload_id})
+    await run_cli_match()
     bump()
     await db.recommendations.update_many({"status": "new"}, {"$set": {"status": "stale"}})
     if await db.calls.find_one({}, {"_id": 1}):
@@ -249,6 +295,16 @@ class SettingsIn(BaseModel):
     list_drop_pct: float = Field(ge=5, le=95)
     disposition_map: Dict[str, Literal["sale", "contact", "connected", "none"]] = {}
     list_costs: Dict[str, float] = {}
+    cdr_match_seconds: int = Field(default=120, ge=10, le=1800)
+
+
+@api_router.post("/cdr/rematch")
+async def cdr_rematch(user: dict = Depends(require_user)):
+    await reset_cdr_clis({})
+    matched = await run_cli_match()
+    bump()
+    start_generation()
+    return {"matched": matched}
 
 
 @api_router.get("/settings")
@@ -258,6 +314,7 @@ async def get_settings_route(user: dict = Depends(require_user)):
     s["dispositions"] = [{"name": r["_id"], "count": r["count"],
                           "category": s["disposition_map"].get(r["_id"]) or analytics.guess_category(r["_id"])} for r in rows]
     s["lists"] = sorted(await db.calls.distinct("list"))
+    s["cdr_rows"] = await db.cdr.estimated_document_count()
     return s
 
 
@@ -270,7 +327,11 @@ async def put_settings(body: SettingsIn, user: dict = Depends(require_user)):
     data = body.model_dump()
     data["disposition_map"] = {k.upper().strip(): v for k, v in data["disposition_map"].items()}
     data["list_costs"] = {k: v for k, v in data["list_costs"].items() if v and v > 0}
+    old = await get_settings()
     await db.settings.update_one({"id": "workspace"}, {"$set": data}, upsert=True)
+    if old["cdr_match_seconds"] != data["cdr_match_seconds"]:
+        await reset_cdr_clis({})
+        await run_cli_match()
     bump()
     return await get_settings()
 

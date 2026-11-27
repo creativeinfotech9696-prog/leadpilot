@@ -1,0 +1,42 @@
+{
+  "summary": "Tested the CDR upload and CLI matching feature in the backend (new pytest file, 7/8 pass) and the UI (Playwright on Uploads, CLIs and Settings). Almost all requested items work. Backend: preview with kind=cdr suggests from/to/timestamp/duration with no dispositions; commit returns 400 when from, to or timestamp is missing, the time zone is invalid or the kind is unknown. A calls file without a CLI stores 'Unknown'. A CDR in UTC with file_tz=UTC matched 3 of 4 calls stored in America/New_York; the 4th, 2h off, stayed unmatched. Matching handles the +1 prefix, and inbound calls take the CDR destination (DID) as the CLI. Upload order does not matter (CDR first, then calls: cli_matched=3). call_id matching works when the CDR time is within about 2h, even with the wrong phone. cli_matched and kind are stored in history. The CLI table leaves out 'Unknown'. Setting the window to 10s re-runs matching (only the 5s-off row stays matched) and setting it back to 120 restores all 3. POST /cdr/rematch returns matched=3. Deleting the CDR upload resets its CLIs to Unknown. A 150k-row CDR against the 190k real calls committed in 5.6s, rematch took 1.8s and delete 2.3s. UI: the report type picker works; choosing CDR shows the map-from/to/timestamp/call_id/duration/time fields, map-file-tz and the 'How CLIs are matched' panel, with no disposition panel. The toast reads 'Imported 4 CDR rows — CLI found for 3 calls'. History shows Type and CLI matched columns. The Re-match button works, the CLIs page shows cli-coverage-note and the 3 matched CLIs, and the CDR window setting saves. Found 1 functional bug in the backend, 1 UI crash, and minor issues, listed below.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "run_cli_match (used by commit, rematch, delete and settings)", "issue": "Matching by call_id silently depends on timestamps. CDR rows are only loaded within ±2h of the earliest and latest Unknown call (lo/hi filter), so an exact call_id match is skipped when the CDR time is further away (CDR a day later, or the wrong file_tz making a >2h shift on an isolated date range). Reproduced: test_call_id_match_far_timestamp gives cli_matched=0 (expected 1). Fix: for calls that have a call_id, also load CDR rows with {call_id: {$in: [...]}} regardless of ts, or run the call_id lookup before the time-window query.", "priority": "MEDIUM"}
+    ],
+    "minor": [
+      {"endpoint": "run_cli_match", "issue": "Every calls upload, delete, rematch and window change loads ALL calls with cli='Unknown' (190k today; this grows with every daily Primo export that has no CDR) plus every CDR in that span. It is fine now (under 2s) but scales without limit. Consider limiting the match to the date range of the new upload, or doing the work in chunks."},
+      {"endpoint": "match_cli", "issue": "There is no one-to-one constraint, so a single CDR leg can be assigned to several dialer calls to the same number within the window (redials). Usually harmless, but it can over-attribute."},
+      {"endpoint": "GET /api/analytics kpis.cli_coverage", "issue": "Rounded to 1 decimal place, so 3 matched calls out of 190k show as '0%' on the Uploads and CLIs banners. Consider showing '<0.1%'."},
+      {"endpoint": "uploads.clis (legacy record)", "issue": "The real upload record still shows CLIs=1 (counted before 'Unknown' was excluded), but it actually has 0 known CLIs. This is display-only."},
+      {"endpoint": "upload_commit kind=cdr", "issue": "'clis' counts distinct 'from' numbers, which includes customer numbers on inbound legs (the 150k-row test CDR showed clis=150000). The label is misleading for CDR rows."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Settings save (and every toast.error(errMsg(e)))", "issue": "Entering an out-of-range value (e.g. CDR match window 5, allowed 10-1800) makes FastAPI return a 422 whose detail is an array. errMsg passes that array to toast.error, and React crashes with 'Objects are not valid as a React child' (full white screen). Fix errMsg in lib/api.js: if detail is an array, join the .msg values. Optionally also add min/max to the settings-cdr-window input.", "selector": "[data-testid='settings-cdr-window'] + [data-testid='settings-save-btn']", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Uploads / CLIs coverage banners", "issues": ["The banner shows '0%' even though some CLIs were matched (rounding).", "The best CLI + list pairings panel shows an empty table without an empty-state message when there is too little paired volume."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_cdr_cli_match.py", "/app/test_reports/pytest/pytest_cdr.xml"],
+  "action_items": [
+    "Make call_id matching independent of the ±2h ts window in server.run_cli_match (query the CDR by call_id $in for calls that have call_id).",
+    "Fix errMsg in frontend/src/lib/api.js to handle Pydantic 422 detail arrays (the app currently crashes on an invalid settings value). Add min=10 max=1800 to the CDR window input.",
+    "Optional: limit run_cli_match to the new upload's date range for scalability; show '<0.1%' coverage; fix the CDR 'clis' count semantics."
+  ],
+  "critical_code_review_comments": [
+    "server.run_cli_match: the lo/hi CDR filter is applied to call_id matches too (bug above).",
+    "server.run_cli_match: loads every Unknown call on every write path, with no date scoping.",
+    "ingest.parse_ts: the has_offset regex '[+-]\\d{2}:?\\d{2}$' also matches date-only strings like '11-25-2026' (ends in '-2026'), so those would be parsed as UTC instead of file_tz. This is an edge case.",
+    "lib/api.js errMsg returns a non-string for 422 responses, which crashes React toasts app-wide."
+  ],
+  "updated_files": ["/app/backend/tests/test_cdr_cli_match.py"],
+  "success_rate": {"backend": "7/8 pytest (87.5%); 1 failing test documents the call_id time-window bug", "frontend": "All requested CDR flows passed; 1 crash on invalid settings input"},
+  "seed_data_creation": "None kept. Every TEST upload (calls and CDR, including a 150k-row TEST_big_cdr.csv) was deleted by id. After cleanup only the real upload d1ab25ef... remains, with 190,049 calls, all cli=Unknown, and 0 CDR rows. Settings were compared field by field with the snapshot taken before the UI test: identical (tz America/New_York, min_dials 100, 35/30, cdr 120, disposition_map with 26 entries, list_costs {}). Side effect: 4 column-mapping signatures for the TEST file formats were saved in db.mappings (calls:calldate|calltype|listname|..., cdr:billsec|destination|source|starttime, plus the call ID variants). They do not touch the real export's mapping. Each commit and delete also triggered AI recommendation regeneration.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `cd /app/backend && python -m pytest tests/test_cdr_cli_match.py -n 0` (serial; it cleans up its own uploads and restores settings). Do NOT run tests/test_dialer_api.py against this DB: it calls /demo/load and the user's real data is present. Real calls have no call_id field and the direction is mapped from 'comments'. Test phone numbers are 786555PPNN and test dates are 2026-11-26/27. For the browser: open /sign-in, then run Clerk signIn.create({strategy:'ticket'}) in page.evaluate. Python urllib calls from inside the browser script get 403 (Cloudflare UA), so use curl in bash instead."
+}

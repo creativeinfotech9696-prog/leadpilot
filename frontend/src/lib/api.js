@@ -14,7 +14,11 @@ export function useApi() {
   }, [getToken]);
 }
 
-export const errMsg = (e) => e?.response?.data?.detail || e?.message || "Something went wrong";
+export const errMsg = (e) => {
+  const d = e?.response?.data?.detail;
+  if (Array.isArray(d)) return d.map((x) => `${(x.loc || []).slice(-1)[0] || ""}: ${x.msg}`).join("; ");
+  return (typeof d === "string" && d) || e?.message || "Something went wrong";
+};
 
 export const WindowContext = createContext({ days: 14, setDays: () => {} });
 export const useWindow = () => useContext(WindowContext);

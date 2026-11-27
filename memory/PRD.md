@@ -22,7 +22,13 @@ Owner / operations manager; floor managers.
 - Editable AI memory (rules / notes / learned) with an on/off switch per item
 - Settings: time zone, thresholds, disposition meaning, list costs → cost per sale
 
+## Implemented (2026-11-27) — CDR matching for CLIs
+- The Primo call export has no CLI column, so there is a second upload type: CDR report (from, to, start time, optional call ID / duration), with a per-file time zone
+- Matching: exact call ID first, otherwise same customer number (last 10 digits) and nearest time within ±cdr_match_seconds (default 120). Outbound takes the CLI from the CDR source; inbound takes the DID from the CDR destination. Works in either upload order
+- Unmatched calls are left out of CLI stats; the CLI coverage % shows on Uploads and CLIs pages; Re-match button; deleting a CDR resets the CLIs it matched; changing the match window re-runs matching
+
 ## Backlog
+- P1: one-to-one CDR leg assignment for redials; show "<0.1%" coverage; CDR "clis" count includes inbound customer numbers
 - P1: dedupe repeated chat-saved rules; persist AI job status in DB; confirm before deleting memory; style REMEMBER lines as chips; wider heatmap
 - P1: deleting an upload shouldn't remove calls that a later upload skipped as duplicates; option to base cost/sale on all data
 - Phase 2: Primo API auto-sync, automatic impact reports, scheduled morning briefing email

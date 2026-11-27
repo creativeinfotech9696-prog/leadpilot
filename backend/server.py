@@ -46,11 +46,13 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("list", ASCENDING), ("ts", DESCENDING)], name="list_ts"),
         IndexModel([("cli", ASCENDING), ("ts", DESCENDING)], name="cli_ts"),
         IndexModel([("cli_upload_id", ASCENDING)], name="cli_upload_id"),
+        IndexModel([("call_id", ASCENDING)], name="call_id"),
     ],
     "cdr": [
         IndexModel([("key", ASCENDING)], name="key", unique=True),
         IndexModel([("ts", ASCENDING)], name="ts"),
         IndexModel([("upload_id", ASCENDING)], name="upload_id"),
+        IndexModel([("call_id", ASCENDING)], name="call_id"),
     ],
     "uploads": [IndexModel([("id", ASCENDING)], name="id", unique=True), IndexModel([("created_at", DESCENDING)], name="created_desc")],
     "recommendations": [IndexModel([("id", ASCENDING)], name="id", unique=True), IndexModel([("status", ASCENDING), ("created_at", DESCENDING)], name="status_created")],
@@ -185,14 +187,21 @@ async def insert_calls(docs: list, coll: str = "calls") -> int:
     return n
 
 
-async def run_cli_match() -> int:
+async def run_cli_match(rng: Optional[tuple] = None, call_ids: Optional[list] = None) -> int:
     s = await get_settings()
-    calls = await db.calls.find({"cli": "Unknown"}, {"_id": 1, "phone": 1, "ts": 1, "direction": 1, "call_id": 1}).to_list(None)
+    q = {"cli": "Unknown"}
+    if rng:
+        window = {"ts": {"$gte": rng[0] - timedelta(hours=2), "$lte": rng[1] + timedelta(hours=2)}}
+        q.update({"$or": [window, {"call_id": {"$in": call_ids}}]} if call_ids else window)
+    calls = await db.calls.find(q, {"_id": 1, "phone": 1, "ts": 1, "direction": 1, "call_id": 1}).to_list(None)
     if not calls:
         return 0
     df = pd.DataFrame(calls)
     lo, hi = df["ts"].min() - timedelta(hours=2), df["ts"].max() + timedelta(hours=2)
-    cdr = await db.cdr.find({"ts": {"$gte": lo, "$lte": hi}}, {"_id": 0, "from": 1, "to": 1, "ts": 1, "call_id": 1, "upload_id": 1}).to_list(None)
+    proj = {"_id": 0, "from": 1, "to": 1, "ts": 1, "call_id": 1, "upload_id": 1}
+    ids = [c for c in df.get("call_id", pd.Series(dtype=str)).dropna().unique().tolist() if c]
+    cdr_q = {"$or": [{"ts": {"$gte": lo, "$lte": hi}}, {"call_id": {"$in": ids}}]} if ids else {"ts": {"$gte": lo, "$lte": hi}}
+    cdr = await db.cdr.find(cdr_q, proj).to_list(None)
     if not cdr:
         return 0
     res = await asyncio.to_thread(ingest.match_cli, df, pd.DataFrame(cdr), s["cdr_match_seconds"])
@@ -205,8 +214,9 @@ async def reset_cdr_clis(flt: dict) -> None:
     await db.calls.update_many({"cli_upload_id": {"$exists": True}, **flt}, {"$set": {"cli": "Unknown"}, "$unset": {"cli_upload_id": ""}})
 
 
-async def finish_ingest(upload: dict, disposition_map: dict) -> dict:
-    upload["cli_matched"] = await run_cli_match()
+async def finish_ingest(upload: dict, disposition_map: dict, call_ids: Optional[list] = None) -> dict:
+    rng = (datetime.fromisoformat(upload["date_from"]), datetime.fromisoformat(upload["date_to"]))
+    upload["cli_matched"] = await run_cli_match(rng, call_ids)
     await db.uploads.insert_one(dict(upload))
     if disposition_map:
         s = await get_settings()
@@ -249,7 +259,8 @@ async def upload_commit(file: UploadFile = File(...), payload: str = Form(...), 
               "lists": 0 if cdr else len({d["list"] for d in docs}),
               "clis": len({d["from"] for d in docs}) if cdr else len({d["cli"] for d in docs} - {"Unknown"}),
               "created_at": now_iso(), "uploaded_by": user["user_id"]}
-    return await finish_ingest(upload, {} if cdr else body.disposition_map)
+    ids = list({d["call_id"] for d in docs if d["call_id"]}) if cdr else None
+    return await finish_ingest(upload, {} if cdr else body.disposition_map, ids)
 
 
 @api_router.post("/demo/load")

@@ -235,6 +235,9 @@ async def delete_upload(upload_id: str, user: dict = Depends(require_user)):
         raise HTTPException(404, "Not found")
     await db.calls.delete_many({"upload_id": upload_id})
     bump()
+    await db.recommendations.update_many({"status": "new"}, {"$set": {"status": "stale"}})
+    if await db.calls.find_one({}, {"_id": 1}):
+        start_generation()
     return {"ok": True}
 
 
@@ -368,13 +371,18 @@ async def recs_feedback(rec_id: str, body: FeedbackIn, user: dict = Depends(requ
     if not rec:
         raise HTTPException(404, "Not found")
     upd = {"status": body.status, "feedback_note": body.note.strip(), "feedback_at": now_iso(),
-           "applied_at": now_iso() if body.status == "applied" else None, "outcome": None}
-    await db.recommendations.update_one({"id": rec_id}, {"$set": upd})
+           "applied_at": now_iso() if body.status == "applied" else None, "outcome": None, "memory_id": None}
+    if rec.get("memory_id"):
+        await db.memory.delete_one({"id": rec["memory_id"]})
+    mem = None
     if body.status == "failed":
-        await add_memory("learned", f"[{rec['category']}] '{rec['title']}' did NOT work in practice"
-                                    + (f": {body.note.strip()}" if body.note.strip() else "."), "feedback")
+        mem = await add_memory("learned", f"[{rec['category']}] '{rec['title']}' did NOT work in practice"
+                                          + (f": {body.note.strip()}" if body.note.strip() else "."), "feedback")
     elif body.status == "ignored" and body.note.strip():
-        await add_memory("note", f"Operator skipped '{rec['title']}': {body.note.strip()}", "feedback")
+        mem = await add_memory("note", f"Operator skipped '{rec['title']}': {body.note.strip()}", "feedback")
+    if mem:
+        upd["memory_id"] = mem["id"]
+    await db.recommendations.update_one({"id": rec_id}, {"$set": upd})
     return {**rec, **upd}
 
 

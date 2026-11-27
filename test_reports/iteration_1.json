@@ -1,0 +1,44 @@
+{
+  "summary": "Tested Dialer Intelligence end to end: backend with pytest (30/30 pass) and UI with Playwright. Sign-in used a Clerk ticket through window.Clerk.client.signIn.create. Everything in the brief works: every protected route returns 401 without a token; analytics has the full shape and changes with the 7/14/30/All window; upload goes preview -> mapping -> commit -> history, re-uploading the same file reports 40 duplicates, and deleting an upload removes its calls; missing a required column mapping returns 400. Lead Lists and CLIs pages: status filter chips, search and row expand (reasons) work. Best Time page: heatmap, list select and metric toggle work. AI Directives: plans are auto-generated after upload and sample load, 'Generate new plan' works, and Applied / Ignore / Didn't work feedback with notes and undo works. AI chat streams over SSE, history is still there after a reload, and a 'Remember:' message saves a rule (toast shown, rule listed on /memory). AI Memory: add, edit, toggle and delete work. Settings: timezone, thresholds, list cost and disposition category all save, and analytics refresh (cost/sale $5.88 showed on CA-ACA). Found one backend 500 (mixed time zones in an upload) and a few logic gaps, listed below.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/uploads/commit", "issue": "Returns 500 when the timestamp column mixes UTC offsets (e.g. '2026-11-20T10:00:00-05:00' and '2026-11-20T11:00:00Z'). ingest.build_docs calls pd.to_datetime(format='mixed'), which raises 'ValueError: Mixed timezones detected'. Fix: parse with utc=True for strings that carry an offset and localize naive values to the workspace tz, or wrap the parsing in try/except and return a 400.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "DELETE /api/uploads/{id}", "issue": "Deleting an upload does not regenerate the AI recommendations. A plan generated while the deleted data was loaded stays active. Reproduced: after uploading and then deleting a TEST CSV, the active plan included 'Remove test list and test CLIs from reporting'. Consider calling start_generation() (or marking 'new' recs stale) after a delete."},
+      {"endpoint": "PATCH /api/recommendations/{id} status=new (undo)", "issue": "Undo resets the recommendation but leaves the 'learned' or 'note' memory item that 'Didn't work' or 'Ignore with note' created. The AI keeps treating the undone recommendation as failed. Store the memory id on the rec and delete it on undo."},
+      {"endpoint": "POST /api/chat/stream", "issue": "Repeating a 'Remember:' rule saves duplicate rule items because there is no dedupe on text."},
+      {"endpoint": "GET /api/recommendations/status", "issue": "STATE['ai'] (running/last_run/last_error) lives in process memory. It resets to last_run=null on every backend reload, and a reload during generation silently kills the background task."},
+      {"endpoint": "DELETE /api/uploads/{id}", "issue": "Calls are deduplicated across uploads by key, so if upload B's rows were skipped as duplicates of upload A, deleting A also removes those calls even though B is still in history."},
+      {"endpoint": "analytics cost_per_sale", "issue": "cost_per_sale divides the total list spend by the sales in the selected window, so the figure changes with the 7/14/30 selector. Consider computing it on all data or labelling it."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Best Time", "issues": ["The heatmap uses only about 35% of the panel width at 1920px, leaving a large empty area on the right."]},
+      {"screen": "AI chat", "issues": ["The raw 'REMEMBER: ...' line appears in the assistant message. It could be styled as a 'Saved to memory' chip."]},
+      {"screen": "AI Memory", "issues": ["Delete has no confirmation or undo (Uploads uses window.confirm)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_dialer_api.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Fix the 500 in ingest.build_docs for mixed-offset timestamps: handle tz-aware and naive values, return 400 on parse failure.",
+    "Regenerate or stale active recommendations after DELETE /api/uploads/{id}.",
+    "On undo of a 'failed' or 'ignored' recommendation, remove the memory item that feedback created.",
+    "Optional: dedupe chat-saved rules; persist AI generation status in Mongo."
+  ],
+  "critical_code_review_comments": [
+    "ingest.build_docs: pd.to_datetime(format='mixed') raises on mixed tz offsets, so the whole upload fails with a 500.",
+    "server.recs_feedback: undo does not reverse the side effects of add_memory.",
+    "server.delete_upload: calls bump() but not start_generation(), so recommendations go stale.",
+    "Files under /app/backend (including tests/) trigger the uvicorn --reload watcher. Creating test files restarted the backend mid-generation."
+  ],
+  "updated_files": ["/app/backend/tests/test_dialer_api.py"],
+  "success_rate": {"backend": "96% (30/30 pytest pass; 1 additional edge-case 500 found manually)", "frontend": "100% of requested flows passed"},
+  "seed_data_creation": "None kept. Test uploads (TEST_List_Pytest, TEST_List_UI), memory items, rec feedback and settings changes were all deleted or restored by id. Settings are back to tz=America/New_York, disposition_map={NA:none}, list_costs={}, min_dials=100. Sample data was reloaded once via the 'Load sample data' button (deterministic: same 23,712 rows), which regenerated the active plan; the old plan's recs are now 'stale'. Chat history of the test user (6 messages) was left in place.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Auth: the browser tool's page_url navigation consumes ?__clerk_ticket (single use), so open /sign-in, then run window.Clerk.client.signIn.create({strategy:'ticket', ticket}) and setActive in page.evaluate. Generate a fresh ticket for each browser run with `python /app/tests/clerk_token.py ticket`. The LLM is fast here (chat about 5s, rec generation about 30-45s). Do not delete memory by 'new since start' sets in parallel tests; the xdist workers race. Run pytest from /app/backend: `python -m pytest tests/test_dialer_api.py`."
+}

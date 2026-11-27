@@ -80,10 +80,11 @@ def build_docs(df: pd.DataFrame, mapping: dict, tz: str, upload_id: str) -> tupl
     raw = col("timestamp")
     if mapping.get("time"):
         raw = raw + " " + col("time")
-    ts = pd.to_datetime(raw, errors="coerce", format="mixed")
-    if ts.dt.tz is None:
-        ts = ts.dt.tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward")
-    ts = ts.dt.tz_convert("UTC").dt.tz_localize(None)
+    has_offset = raw.str.contains(r"(?:Z|[+-]\d{2}:?\d{2})$", regex=True)
+    naive = pd.to_datetime(raw.where(~has_offset), errors="coerce", format="mixed")
+    naive = naive.dt.tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward").dt.tz_convert("UTC")
+    aware = pd.to_datetime(raw.where(has_offset), errors="coerce", format="mixed", utc=True)
+    ts = aware.where(has_offset, naive).dt.tz_localize(None)
     direction = col("direction").str.lower()
     cli_raw = col("cli")
     cli = cli_raw.str.replace(r"\D", "", regex=True)

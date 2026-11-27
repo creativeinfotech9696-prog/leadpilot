@@ -1,8 +1,11 @@
 import hashlib
 import io
 import re
+from datetime import timezone
+from zoneinfo import ZoneInfo
 
 import pandas as pd
+from dateutil import parser as dtparser
 
 CALL_ID = ["uniqueid", "callid", "calluuid", "uuid", "linkedid", "calluniqueid", "callreference", "callref"]
 TS = ["calldate", "datetime", "calldatetime", "starttime", "calltime", "timestamp", "date", "eventtime",
@@ -96,15 +99,38 @@ def _digits(s: pd.Series) -> pd.Series:
     return s.str.replace(r"\D", "", regex=True).str[-10:]
 
 
+TZ_ABBR = {k: h * 3600 for k, h in {"UTC": 0, "GMT": 0, "Z": 0, "EST": -5, "EDT": -4, "CST": -6, "CDT": -5, "MST": -7,
+                                      "MDT": -6, "PST": -8, "PDT": -7, "IST": 5.5, "PKT": 5}.items()}
+
+
+def _parse_one(v: str, zone: ZoneInfo):
+    try:
+        d = dtparser.parse(v, tzinfos=TZ_ABBR)
+    except (ValueError, OverflowError, TypeError):
+        return pd.NaT
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=zone)
+    return d.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def parse_ts(df, mapping, tz) -> pd.Series:
-    raw = _col(df, mapping, "timestamp")
+    raw = _col(df, mapping, "timestamp").str.strip()
     if mapping.get("time"):
-        raw = raw + " " + _col(df, mapping, "time")
-    has_offset = raw.str.contains(r"(?:Z|[+-]\d{2}:?\d{2})$", regex=True)
-    naive = pd.to_datetime(raw.where(~has_offset), errors="coerce", format="mixed")
-    naive = naive.dt.tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward").dt.tz_convert("UTC")
-    aware = pd.to_datetime(raw.where(has_offset), errors="coerce", format="mixed", utc=True)
-    return aware.where(has_offset, naive).dt.tz_localize(None)
+        raw = raw + " " + _col(df, mapping, "time").str.strip()
+    nonblank = raw[raw != ""]
+    if len(nonblank) and nonblank.str.fullmatch(r"\d{10}(\d{3})?(\.\d+)?").all():  # unix epoch seconds / ms
+        n = pd.to_numeric(raw, errors="coerce")
+        return pd.to_datetime(n, unit="ms" if n.max() > 1e11 else "s", errors="coerce")
+    try:
+        has_offset = raw.str.contains(r"(?:Z|[+-]\d{2}:?\d{2})$", regex=True)
+        naive = pd.to_datetime(raw.where(~has_offset), errors="coerce", format="mixed")
+        naive = naive.dt.tz_localize(tz, ambiguous="NaT", nonexistent="shift_forward").dt.tz_convert("UTC")
+        aware = pd.to_datetime(raw.where(has_offset), errors="coerce", format="mixed", utc=True)
+        return aware.where(has_offset, naive).dt.tz_localize(None)
+    except (ValueError, TypeError):  # time-zone names / mixed styles: parse each distinct value
+        zone = ZoneInfo(tz)
+        lookup = {v: _parse_one(v, zone) for v in raw.unique()}
+        return pd.to_datetime(raw.map(lookup), errors="coerce")
 
 
 def build_docs(df: pd.DataFrame, mapping: dict, tz: str, upload_id: str) -> tuple[list, int]:

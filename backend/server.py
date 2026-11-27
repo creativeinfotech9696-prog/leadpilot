@@ -247,7 +247,11 @@ async def upload_commit(file: UploadFile = File(...), payload: str = Form(...), 
     upload_id = str(uuid.uuid4())
     df = await read_upload(file)
     build = ingest.build_cdr_docs if cdr else ingest.build_docs
-    docs, invalid = await asyncio.to_thread(build, df, body.mapping, tz, upload_id)
+    try:
+        docs, invalid = await asyncio.to_thread(build, df, body.mapping, tz, upload_id)
+    except Exception:
+        logger.exception("upload parse failed")
+        raise HTTPException(400, "Could not read the dates/times in this file. Check that the time column is mapped correctly.")
     if not docs:
         raise HTTPException(400, "No rows had a readable date/time. Check the timestamp column mapping.")
     inserted = await insert_calls(docs, "cdr" if cdr else "calls")

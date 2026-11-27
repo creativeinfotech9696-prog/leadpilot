@@ -1,0 +1,166 @@
+{
+  "theme": {
+    "default_mode": "dark",
+    "rationale": "High-intensity dialer command center operations requiring sustained 8+ hour monitoring without ocular fatigue. Deep slate obsidian base with precise signal highlights.",
+    "backgrounds": {
+      "page": "#090D14",
+      "surface_base": "#0E131F",
+      "surface_raised": "#141B2D",
+      "surface_subtle": "#1B243B",
+      "border_default": "#1F2B45",
+      "border_subtle": "#172033"
+    },
+    "text": {
+      "primary": "#F1F5F9",
+      "secondary": "#94A3B8",
+      "muted": "#64748B",
+      "numbers_tabular": "font-mono font-medium text-slate-100"
+    },
+    "semantic_signals": {
+      "green_keep": {
+        "hex": "#10B981",
+        "bg": "rgba(16, 185, 129, 0.12)",
+        "border": "rgba(16, 185, 129, 0.3)",
+        "label": "Keep / Active"
+      },
+      "amber_watch": {
+        "hex": "#F59E0B",
+        "bg": "rgba(245, 158, 11, 0.12)",
+        "border": "rgba(245, 158, 11, 0.3)",
+        "label": "Watch / Fatigued"
+      },
+      "orange_rest": {
+        "hex": "#F97316",
+        "bg": "rgba(249, 115, 22, 0.12)",
+        "border": "rgba(249, 115, 22, 0.3)",
+        "label": "Rest (Cooldown)"
+      },
+      "red_replace": {
+        "hex": "#EF4444",
+        "bg": "rgba(239, 68, 68, 0.12)",
+        "border": "rgba(239, 68, 68, 0.3)",
+        "label": "Replace / Spam Flagged"
+      },
+      "ai_cyan_pulse": {
+        "hex": "#06B6D4",
+        "border": "#0891B2",
+        "bg": "rgba(6, 182, 212, 0.12)",
+        "label": "AI Intelligence & Predictions"
+      }
+    }
+  },
+  "typography": {
+    "font_family_headings": "Cabinet Grotesk, Outfit, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    "font_family_body": "IBM Plex Sans, Inter, system-ui, sans-serif",
+    "font_family_mono": "'JetBrains Mono', 'Source Code Pro', Menlo, monospace",
+    "hierarchy": {
+      "h1": "text-2xl sm:text-3xl font-bold tracking-tight text-slate-100",
+      "h2": "text-xl sm:text-2xl font-semibold tracking-tight text-slate-100",
+      "h3": "text-lg sm:text-xl font-medium text-slate-200",
+      "h4_card": "text-sm font-semibold uppercase tracking-wider text-slate-400",
+      "kpi_value": "text-3xl sm:text-4xl font-mono font-bold tracking-tight text-slate-50",
+      "body": "text-sm text-slate-300 leading-relaxed",
+      "body_sm": "text-xs text-slate-400 font-normal",
+      "table_cell": "text-xs font-mono text-slate-200"
+    }
+  },
+  "layout_architecture": {
+    "type": "Full Desktop Operations Control Center with Collapsible AI Intelligence Drawer",
+    "navigation": {
+      "top_bar": "h-14 border-b border-[#1F2B45] bg-[#0E131F]/95 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-40",
+      "tabs": [
+        {"id": "overview", "label": "Operations Command", "icon": "LayoutDashboard"},
+        {"id": "lead_health", "label": "Lead Lists (Packs)", "icon": "Database"},
+        {"id": "cli_health", "label": "CLI & Reputation", "icon": "PhoneCall"},
+        {"id": "heatmap", "label": "Best Time to Dial", "icon": "Flame"},
+        {"id": "recommendations", "label": "AI Directives", "icon": "Sparkles"},
+        {"id": "uploads", "label": "CDR & Lead Upload", "icon": "UploadCloud"},
+        {"id": "memory", "label": "AI Memory & Logic", "icon": "Brain"},
+        {"id": "settings", "label": "Dialer Config", "icon": "Sliders"}
+      ]
+    },
+    "grid_structure": "Grid Mode B: High Density Command Layout with 1px border division (no heavy dropshadows, crisp technical borders)",
+    "ai_side_panel": "Fixed 400px width slide-out right drawer (expandable to 500px), with streaming message simulator, fast prompt chips, and real-time operational context binding."
+  },
+  "key_components": {
+    "kpi_cards": [
+      {"id": "total_dials", "label": "Total Dials Today", "format": "number", "test_id": "kpi-total-dials"},
+      {"id": "connect_rate", "label": "Connect Rate (%)", "format": "percentage", "test_id": "kpi-connect-rate"},
+      {"id": "conversions", "label": "Sales / Transfers", "format": "number", "test_id": "kpi-conversions"},
+      {"id": "conv_rate", "label": "Conversion Rate", "format": "percentage", "test_id": "kpi-conversion-rate"},
+      {"id": "cli_at_risk", "label": "CLIs Flagged (Spam)", "format": "status_count", "test_id": "kpi-cli-at-risk"},
+      {"id": "active_lead_packs", "label": "Active Lead Packs", "format": "count", "test_id": "kpi-active-lead-packs"}
+    ],
+    "charts": [
+      {
+        "type": "hourly_connect_trend",
+        "description": "Area + Line dual chart showing Hourly Connect Rate % vs Dials made",
+        "library": "recharts",
+        "test_id": "chart-hourly-trend"
+      },
+      {
+        "type": "inbound_vs_outbound",
+        "description": "Bar chart comparing inbound calls handled vs outbound campaign connection efficiency",
+        "library": "recharts",
+        "test_id": "chart-inbound-outbound"
+      },
+      {
+        "type": "heatmap_hour_weekday",
+        "description": "7-day by 24-hour heat matrix of connect probability with instant Primo dialler scheduling suggestions",
+        "test_id": "heatmap-time-to-dial"
+      }
+    ],
+    "lead_health_table": {
+      "columns": ["List Name / Pack ID", "Source / Vendor", "Total Leads", "Dials Made", "Connect Rate", "Transfer/Sale Rate", "Fatigue Score", "AI Health Status", "Recommended Action"],
+      "status_badges": ["Keep (High Yield)", "Watch (Decaying)", "Rest (Needs Cooldown)", "Replace (Exhausted / Burned)"],
+      "test_id": "lead-health-table"
+    },
+    "cli_health_table": {
+      "columns": ["Phone Number (CLI)", "Area Code / Region", "Carrier", "Dials Past 24h", "Answer Seizure Ratio (ASR)", "Spam Score / Robokiller Flag", "Health Badge", "Action (Rotate / Pause)"],
+      "test_id": "cli-health-table"
+    },
+    "recommendations_feed": {
+      "filters": ["All Directives", "Lead Routing", "CLI Rotation", "Time Scheduling"],
+      "card_actions": ["Apply to Dialer", "Ignore", "Mark Didn't Work (Feeds Learning Loop)"],
+      "test_id": "ai-recommendations-feed"
+    },
+    "csv_upload_wizard": {
+      "steps": [
+        "1. Drag & drop CDR / Lead Export (CSV or Excel)",
+        "2. Automated Column Mapping (Phone, CLI, Disposition, Duration, Timestamp, List ID)",
+        "3. Disposition Normalization (e.g., 'SALE', 'ANSWER', 'BUSY', 'DROP', 'DNC')",
+        "4. Ingestion & Instant AI Analysis Run"
+      ],
+      "upload_history_table": "List past uploads with batch status, row counts, and error validation",
+      "test_id": "csv-upload-container"
+    },
+    "ai_memory_editor": {
+      "sections": [
+        "Active Operational Rules (e.g. 'Never dial Nevada lead lists after 7 PM EST')",
+        "Learned Outcomes & Weights (Adjusted confidence based on feedback)",
+        "Operator Manual Directives (Custom notes given to the AI assistant)"
+      ],
+      "test_id": "ai-memory-editor"
+    }
+  },
+  "interactive_rules": {
+    "testing_attributes": "All clickable buttons, tabs, modal triggers, and inputs MUST include data-testid attributes formatted in kebab-case (e.g., data-testid='upload-csv-btn', data-testid='apply-rec-btn-1', data-testid='ai-chat-send-btn').",
+    "sonner_toast": "Use Sonner for feedback when: AI recommendation is applied, CLI rotated, file uploaded, or memory rule saved.",
+    "modals_and_drawers": "Use solid background with subtle 1px border (#1F2B45) and backdrop blur overlay (never transparent backgrounds)."
+  },
+  "component_path": {
+    "dashboard_main": "/app/frontend/src/components/dialer/DialerOperationsDashboard.js",
+    "ai_drawer": "/app/frontend/src/components/dialer/AiAssistantDrawer.js",
+    "upload_wizard": "/app/frontend/src/components/dialer/CdrUploadWizard.js",
+    "lead_table": "/app/frontend/src/components/dialer/LeadHealthTable.js",
+    "cli_table": "/app/frontend/src/components/dialer/CliHealthTable.js",
+    "heatmap_view": "/app/frontend/src/components/dialer/DialerHeatmap.js",
+    "memory_view": "/app/frontend/src/components/dialer/AiMemoryEditor.js",
+    "settings_view": "/app/frontend/src/components/dialer/DialerSettings.js"
+  },
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": {
+    "styling_discipline": "High-density dark command center. Do not use generic full-screen gradients. Use crisp 1px borders (#1F2B45) with #0E131F card surfaces.",
+    "color_contrast": "Numbers and metric figures must be rendered in tabular font-mono for scanning speed. Status badges must have explicit contrasting text and slight desaturated backgrounds.",
+    "ai_personality": "Pragmatic, high-precision dialer supervisor named 'Primo Sentinel AI'. Direct, actionable telemetry insights instead of generic chat answers."
+  }
+}
